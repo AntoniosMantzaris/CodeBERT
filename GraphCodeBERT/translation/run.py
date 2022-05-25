@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 #load parsers
 parsers={}
 for lang in dfg_function:
-    LANGUAGE = Language('parser/my-languages.so', lang)
+    LANGUAGE = Language('CodeBERT/GraphCodeBERT/translation/parser/my-languages.so', lang)
     parser = Parser()
     parser.set_language(LANGUAGE)
     parser = [parser,dfg_function[lang]]
@@ -112,37 +112,7 @@ def extract_dataflow(code, parser,lang):
 
 class Example(object):
     """A single training/test example."""
-    """
-    def __init__(self,
-                 source,
-                 target,
-                 lang
-                 ):
-        self.source = source
-        self.target = target
-        self.lang=lang
 
-def read_examples(filename):
-   # Read examples from filename
-    examples=[]
-    source,target=filename.split(',')  #different dataset format
-    lang='java'
-    if source[-1]=='s':
-        lang='c_sharp'
-
-    with open(source,encoding="utf-8") as f1,open(target,encoding="utf-8") as f2:
-        for line1,line2 in zip(f1,f2):
-            line1=line1.strip()         #from source and target string delete spaces from start and end
-            line2=line2.strip()
-            examples.append(
-                Example(
-                    source=line1,
-                    target=line2,
-                    lang=lang
-                        )
-            )
-
-    return examples"""
     def __init__(self,
                  idx,
                  source,
@@ -161,10 +131,10 @@ def read_examples(filename):
             js=json.loads(line)
             if 'idx' not in js:
                 js['idx']=idx
-            code=' '.join(js['code_tokens']).replace('\n',' ')
-            code=' '.join(code.strip().split())
-            nl=' '.join(js['docstring_tokens']).replace('\n','')
-            nl=' '.join(nl.strip().split())
+
+            nl=''.join(js['docstring_tokens']).replace('\n',' ').replace("'",'')
+            nl=''.join(nl.strip().split()).replace(',',' ')[1:-1]
+            code = js["code"]
             examples.append(
                 Example(
                         idx = idx,
@@ -200,7 +170,7 @@ class InputFeatures(object):
 
 parsers={}
 for lang in dfg_function:
-    LANGUAGE = Language('parser/my-languages.so', lang)
+    LANGUAGE = Language('CodeBERT/GraphCodeBERT/translation/parser/my-languages.so', lang)
     parser = Parser()
     parser.set_language(LANGUAGE)
     parser = [parser,dfg_function[lang]]
@@ -262,29 +232,7 @@ def convert_examples_to_features(examples, tokenizer, args,stage=None):
         if example_index < 5:
             if stage=='train':
                 logger.info("*** Example ***")
-                """
-                logger.info("source_tokens: {}".format([x.replace('\u0120','_') for x in source_tokens]))
-                logger.info("source_ids: {}".format(' '.join(map(str, source_ids))))
-                logger.info("source_mask: {}".format(' '.join(map(str, source_mask))))
-                logger.info("position_idx: {}".format(position_idx))
-                logger.info("dfg_to_code: {}".format(' '.join(map(str, dfg_to_code))))
-                logger.info("dfg_to_dfg: {}".format(' '.join(map(str, dfg_to_dfg))))
 
-                logger.info("target_tokens: {}".format([x.replace('\u0120','_') for x in target_tokens]))
-                logger.info("target_ids: {}".format(' '.join(map(str, target_ids))))
-                logger.info("target_mask: {}".format(' '.join(map(str, target_mask))))
-
-        features.append(
-            InputFeatures(
-                 example_index,
-                 source_ids,
-                 position_idx,
-                 dfg_to_code,
-                 dfg_to_dfg,
-                 target_ids,
-                 source_mask,
-                 target_mask,
-                 """
                 logger.info("idx: {}".format(example.idx))
 
                 logger.info("source_tokens: {}".format([x.replace('\u0120','_') for x in source_tokens]))
@@ -446,12 +394,12 @@ def main():
         os.makedirs(args.output_dir)
 
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name, vocab_size = 50005)
+    config = config_class.from_pretrained(args.config_name, vocab_size = 50005, hidden_dropout_prob=0.2)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name )
 
     #budild model
-    encoder = model_class.from_config(config)#from_pretrained(args.model_name_or_path,config=config)
-    decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads)
+    encoder = model_class.from_config(config)
+    decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads, dropout=0.2)
     decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
     model=Seq2Seq(encoder=encoder,decoder=decoder,config=config,
                   beam_size=args.beam_size,max_length=args.max_target_length,
@@ -470,11 +418,8 @@ def main():
         # Prepare training data loader
         train_examples = read_examples(args.train_filename)
         t = train_examples[0]
-        print("TTTTTTTTTTTTTTTTTTTTTTTTTTTT", tokenizer.cls_token_id)
-        print("XXXXXXXXXXXXXXXXXXXXXXXX",t.target)
         train_features = convert_examples_to_features(train_examples, tokenizer,args,stage='train')
         train_data = TextDataset(train_features,args)
-        print("YYYYYYYYYYYYYYYY",train_data.examples[0].target_ids)
         train_sampler = RandomSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size//args.gradient_accumulation_steps,num_workers=4)
 
@@ -485,9 +430,9 @@ def main():
         optimizer_grouped_parameters = [
             {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
              'weight_decay': args.weight_decay},
-            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.01}
         ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon,weight_decay=0.01)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=len(train_dataloader)*args.num_train_epochs*0.1,num_training_steps=len(train_dataloader)*args.num_train_epochs)
 
         #Start training
@@ -684,4 +629,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
